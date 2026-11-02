@@ -1,0 +1,38 @@
+# --- merge into the repo's root .gitignore (keep existing entries) ---
+
+# Dependencies
+node_modules/
+
+# Secrets / local env (real values must never be committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated exports and scrape output
+*.xlsx
+!tests/fixtures/*.xlsx
+exports/
+tmp/
+.cache/
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.playwright/
+traces/
+*.trace.zip
+
+# Logs, coverage, OS/editor noise
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
