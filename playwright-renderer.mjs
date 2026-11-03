@@ -1,4 +1,3 @@
-
 import { chromium } from 'playwright';
 import {
   monthNames,
@@ -6,6 +5,7 @@ import {
   overlapsMonth,
   parseEventPage,
   parseExternalPeople,
+  discoverExternalSubpages,
 } from './dwtc-parser.mjs';
 
 function safeExternal(raw, base) {
@@ -118,7 +118,13 @@ export function createRenderer(config, logger = console) {
     return browserPromise;
   };
 
-  async function scrape({ year, month, onProgress = () => {}, signal }) {
+  async function scrape({
+    year,
+    month,
+    onProgress = () => {},
+    onEvent = () => {},
+    signal,
+  }) {
     if (signal?.aborted) {
       throw signal.reason || new Error('Scrape job aborted.');
     }
@@ -156,9 +162,10 @@ export function createRenderer(config, logger = console) {
           break;
         } catch (err) {
           if (attempt === 2) throw err;
-          logger.warn?.(`Initial DWTC page load attempt ${attempt + 1} failed, retrying...`, {
-            error: err.message,
-          });
+          logger.warn?.(
+            `Initial DWTC page load attempt ${attempt + 1} failed, retrying...`,
+            { error: err.message }
+          );
           await listing.waitForTimeout(2000);
         }
       }
@@ -185,7 +192,6 @@ export function createRenderer(config, logger = console) {
         total: 0,
       });
 
-      // Read the month currently displayed by the DWTC listing.
       async function readDisplayedMonth() {
         const headingLocator = listing
           .locator(
@@ -207,7 +213,6 @@ export function createRenderer(config, logger = console) {
         return getDisplayedMonthYear(bodyText);
       }
 
-      // Identify and click the actual previous/next month controls.
       async function clickMonthDirection(direction, currentMonthInfo) {
         const targetAbbr = currentMonthInfo
           ? (
@@ -217,7 +222,6 @@ export function createRenderer(config, logger = console) {
             ).slice(0, 3).toLowerCase()
           : null;
 
-        // Primary: navigation buttons within the listing events header
         const navButtons = listing.locator(
           'button[class*="NavigateBtn"], [class*="ListingEventsstyled__TitleContainer"] button'
         );
@@ -225,14 +229,15 @@ export function createRenderer(config, logger = console) {
         const navCount = await navButtons.count().catch(() => 0);
 
         if (navCount > 0) {
-          // If a button has the exact abbreviation of the target month (e.g. 'Nov' or 'Sep')
           if (targetAbbr) {
             for (let i = 0; i < navCount; i++) {
               const btn = navButtons.nth(i);
               if (!(await btn.isVisible().catch(() => false))) continue;
+
               const text = (await btn.innerText().catch(() => ''))
                 .trim()
                 .toLowerCase();
+
               if (text === targetAbbr || text.includes(targetAbbr)) {
                 await btn.click({ timeout: 5000 });
                 return true;
@@ -240,7 +245,6 @@ export function createRenderer(config, logger = console) {
             }
           }
 
-          // If there are exactly two navigation buttons (prev = 0, next = 1)
           if (navCount === 2) {
             const btn = navButtons.nth(direction === 'next' ? 1 : 0);
             if (await btn.isVisible().catch(() => false)) {
@@ -250,7 +254,6 @@ export function createRenderer(config, logger = console) {
           }
         }
 
-        // Secondary: non-carousel buttons matching target abbreviation
         if (targetAbbr) {
           const nonCarouselButtons = listing.locator(
             'button:not([class*="slick-"]):not([data-role="none"])'
@@ -260,9 +263,11 @@ export function createRenderer(config, logger = console) {
           for (let i = 0; i < bCount; i++) {
             const btn = nonCarouselButtons.nth(i);
             if (!(await btn.isVisible().catch(() => false))) continue;
+
             const text = (await btn.innerText().catch(() => ''))
               .trim()
               .toLowerCase();
+
             if (text === targetAbbr) {
               await btn.click({ timeout: 5000 });
               return true;
@@ -270,7 +275,6 @@ export function createRenderer(config, logger = console) {
           }
         }
 
-        // Fallback: directional attributes, strictly excluding carousel controls
         const controls = listing.locator(
           'button:not([class*="slick-"]):not([data-role="none"]), [role="button"]:not([class*="slick-"]):not([data-role="none"])'
         );
@@ -313,9 +317,7 @@ export function createRenderer(config, logger = console) {
 
         return false;
       }
-
-      // Dynamically navigate toward the requested month.
-      const maxNavigationSteps = 24;
+            const maxNavigationSteps = 24;
       let current = await readDisplayedMonth();
 
       console.log(
@@ -355,7 +357,11 @@ export function createRenderer(config, logger = console) {
         let updated = null;
         const maxClickAttempts = 3;
 
-        for (let clickAttempt = 0; clickAttempt < maxClickAttempts; clickAttempt++) {
+        for (
+          let clickAttempt = 0;
+          clickAttempt < maxClickAttempts;
+          clickAttempt++
+        ) {
           if (signal?.aborted) break;
 
           const clicked = await clickMonthDirection(direction, current);
@@ -366,14 +372,15 @@ export function createRenderer(config, logger = console) {
             );
           }
 
-          // Wait for displayed month label to update away from oldLabel
           try {
             await listing.waitForFunction(
               (old) => {
                 const heading = document.querySelector(
                   'h2[class*="ListingEventsstyled__Title"], [class*="ListingEventsstyled__TitleContainer"] h2, h2'
                 );
+
                 if (!heading) return false;
+
                 const text = (heading.innerText || '').trim();
                 return text.length > 0 && !text.includes(old);
               },
@@ -381,7 +388,7 @@ export function createRenderer(config, logger = console) {
               { timeout: 3500 }
             );
           } catch {
-            // If waitForFunction timed out, we check readDisplayedMonth directly below
+            // Check the displayed month directly below.
           }
 
           await listing.waitForTimeout(500);
@@ -403,6 +410,7 @@ export function createRenderer(config, logger = console) {
               current: current.label,
             }
           );
+
           await listing.waitForTimeout(1000);
         }
 
@@ -439,7 +447,6 @@ export function createRenderer(config, logger = console) {
         total: 0,
       });
 
-      // Scroll heading into view so event cards IntersectionObserver triggers
       const headingEl = listing
         .locator(
           'h2[class*="ListingEventsstyled__Title"], [class*="ListingEventsstyled__TitleContainer"] h2, h2'
@@ -448,7 +455,6 @@ export function createRenderer(config, logger = console) {
 
       await headingEl.scrollIntoViewIfNeeded().catch(() => {});
 
-      // Wait for event cards or event count text to finish rendering
       try {
         await listing.waitForFunction(
           () => {
@@ -457,6 +463,7 @@ export function createRenderer(config, logger = console) {
             ].some((a) => {
               try {
                 const u = new URL(a.href);
+
                 return (
                   u.hostname === 'www.dwtc.com' &&
                   /^\/en\/events\/[^/]+\/?$/.test(u.pathname)
@@ -471,19 +478,21 @@ export function createRenderer(config, logger = console) {
             const countMatch = document.body.innerText.match(
               /\((\d+)\s+Events?\)/i
             );
-            if (countMatch && parseInt(countMatch[1], 10) > 0) return true;
+
+            if (countMatch && parseInt(countMatch[1], 10) > 0) {
+              return true;
+            }
 
             return false;
           },
           { timeout: 15000 }
         );
       } catch {
-        // If no events appeared after 15s, proceed (the month may truly have 0 events)
+        // The requested month may genuinely contain no events.
       }
 
       await listing.waitForTimeout(1000);
 
-      // Collect DWTC event detail URLs from the current listing.
       const collectEventLinks = async () => {
         const urls = await listing
           .locator('a[href]')
@@ -506,7 +515,6 @@ export function createRenderer(config, logger = console) {
         `DWTC event links discovered initially: ${candidates.size}`
       );
 
-      // Load additional event cards if the listing provides a Load More button.
       const maxLoadMoreClicks = 30;
 
       for (
@@ -573,7 +581,7 @@ export function createRenderer(config, logger = console) {
             { timeout: 5000 }
           );
         } catch {
-          // A click may not add more cards. Collect once more before stopping.
+          // Collect links once more before deciding to stop.
         }
 
         await collectEventLinks();
@@ -600,8 +608,7 @@ export function createRenderer(config, logger = console) {
         total: urlsToVisit.length,
         done: 0,
       });
-
-      for (let i = 0; i < urlsToVisit.length; i++) {
+            for (let i = 0; i < urlsToVisit.length; i++) {
         if (signal?.aborted) {
           logger.warn?.('Scrape aborted by signal.');
           break;
@@ -614,13 +621,11 @@ export function createRenderer(config, logger = console) {
           page = await context.newPage();
           page.setDefaultNavigationTimeout(config.navTimeoutMs);
 
-          let pageLoaded = false;
           for (let attempt = 0; attempt < 2; attempt++) {
             try {
               await page.goto(url, {
                 waitUntil: 'domcontentloaded',
               });
-              pageLoaded = true;
               break;
             } catch (err) {
               if (attempt === 1) throw err;
@@ -660,20 +665,131 @@ export function createRenderer(config, logger = console) {
             safeExternal(event.externalUrl, config.eventsUrl)
           ) {
             const externalPage = await context.newPage();
+            const externalDeadline =
+              Date.now() + (config.externalEventTimeoutMs ?? 20000);
+
+            const remainingExternalMs = () =>
+              Math.max(0, externalDeadline - Date.now());
+
+            const externalNavigationTimeout = (cap = 8000) =>
+              Math.max(1000, Math.min(cap, remainingExternalMs()));
 
             try {
+              const homepageTimeout = externalNavigationTimeout(10000);
+
+              if (remainingExternalMs() <= 0) {
+                throw new Error('External event time budget exhausted.');
+              }
+
               await externalPage.goto(event.externalUrl, {
                 waitUntil: 'domcontentloaded',
-                timeout: Math.min(config.navTimeoutMs, 15000),
+                timeout: homepageTimeout,
               });
 
-              await externalPage.waitForLoadState('networkidle', {
-                timeout: 7000,
-              }).catch(() => {});
-
-              people = parseExternalPeople(
-                await externalPage.content()
+              const homepageIdleWait = Math.min(
+                2500,
+                remainingExternalMs()
               );
+
+              if (homepageIdleWait > 0) {
+                await externalPage.waitForLoadState('networkidle', {
+                  timeout: homepageIdleWait,
+                }).catch(() => {});
+              }
+
+              const homepageHtml = await externalPage.content();
+              people = parseExternalPeople(homepageHtml);
+
+              const subpageUrls = discoverExternalSubpages(
+                homepageHtml,
+                event.externalUrl
+              );
+
+              // Limit external-site processing so one slow website
+              // cannot stall the entire monthly scrape.
+              const configuredMax = config.maxExternalSubpages ?? 3;
+              const maxSubpages = Math.min(
+                subpageUrls.length,
+                configuredMax,
+                3
+              );
+
+              for (let sp = 0; sp < maxSubpages; sp++) {
+                if (
+                  signal?.aborted ||
+                  remainingExternalMs() < 1500
+                ) {
+                  break;
+                }
+
+                if (
+                  people.speakers.length &&
+                  people.exhibitors.length &&
+                  people.sponsors.length &&
+                  people.host.length
+                ) {
+                  break;
+                }
+
+                const subPage = await context.newPage();
+
+                try {
+                  const timeout = externalNavigationTimeout(6000);
+
+                  if (remainingExternalMs() <= 0) {
+                    break;
+                  }
+
+                  await subPage.goto(subpageUrls[sp], {
+                    waitUntil: 'domcontentloaded',
+                    timeout,
+                  });
+
+                  const idleWait = Math.min(
+                    1500,
+                    remainingExternalMs()
+                  );
+
+                  if (idleWait > 0) {
+                    await subPage.waitForLoadState('networkidle', {
+                      timeout: idleWait,
+                    }).catch(() => {});
+                  }
+
+                  const subPeople = parseExternalPeople(
+                    await subPage.content()
+                  );
+
+                  for (const field of [
+                    'speakers',
+                    'exhibitors',
+                    'sponsors',
+                    'host',
+                  ]) {
+                    const current = people[field] || [];
+                    const sub = subPeople[field] || [];
+
+                    if (!sub.length) continue;
+
+                    if (
+                      !current.length ||
+                      (current.length <= 2 && sub.length > current.length)
+                    ) {
+                      people[field] = sub;
+                    } else {
+                      const merged = [...current, ...sub];
+                      people[field] = [...new Set(merged)];
+                    }
+                  }
+                } catch (subErr) {
+                  logger.warn?.('External sub-page failed', {
+                    url: subpageUrls[sp],
+                    error: subErr.message,
+                  });
+                } finally {
+                  await subPage.close().catch(() => {});
+                }
+              }
 
               console.log(`\nEvent: ${event.name}`);
               console.log('Speakers:', people.speakers);
@@ -723,6 +839,10 @@ export function createRenderer(config, logger = console) {
               event.scrapeStatus ||
               (hasExternal ? 'OK' : 'PARTIAL'),
           });
+
+          // Save each completed event immediately.
+          // This preserves results if the overall job times out.
+          onEvent(events[events.length - 1]);
         } catch (error) {
           failures.push({
             name: url,

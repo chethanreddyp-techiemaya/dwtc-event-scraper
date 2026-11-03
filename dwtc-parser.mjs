@@ -42,7 +42,7 @@ function validRange(start, end) {
 export function parseDateRange(input = '') {
   const text = normalize(input);
   let match = text.match(
-    /\b(\d{1,2})\s+([A-Za-z]{3,9})\s*(?:-|–|—|to)\s*(\d{1,2})\s+([A-Za-z]{3,9})[,]?\s*(20\d{2})\b/i
+    /\b(\d{1,2})\s+([A-Za-z]{3,9})\s*(?:-|â€“|â€”|to)\s*(\d{1,2})\s+([A-Za-z]{3,9})[,]?\s*(20\d{2})\b/i
   );
 
   // Example: 29 Sep - 1 Oct 2026
@@ -65,7 +65,7 @@ export function parseDateRange(input = '') {
 
   // Example: 29-30 Sep 2026
   match = text.match(
-    /\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3,9})[,]?\s*(20\d{2})\b/i
+    /\b(\d{1,2})\s*[-â€“]\s*(\d{1,2})\s+([A-Za-z]{3,9})[,]?\s*(20\d{2})\b/i
   );
 
   if (match && monthIndex[match[3].toLowerCase()] !== undefined) {
@@ -80,7 +80,7 @@ export function parseDateRange(input = '') {
 
   // Example: Sep 29 - Oct 1 2026
   match = text.match(
-    /\b([A-Za-z]{3,9})\s+(\d{1,2})\s*(?:-|–|—|to)\s*(?:([A-Za-z]{3,9})\s+)?(\d{1,2})[,]?\s*(20\d{2})\b/i
+    /\b([A-Za-z]{3,9})\s+(\d{1,2})\s*(?:-|â€“|â€”|to)\s*(?:([A-Za-z]{3,9})\s+)?(\d{1,2})[,]?\s*(20\d{2})\b/i
   );
 
   if (match) {
@@ -174,7 +174,7 @@ export async function parseEventPage(html, url) {
 
     if (/^organi[sz]ed by$/i.test(label)) {
       const descriptionStart = result.search(
-        /\b(?:Held under the patronage|Marking a historic milestone|GOTECH 2026 is a prestigious conference|The event brings together|The event offers|This year's|This year’s|With\s+\d[\d,]*\+?\s+(?:exhibitors|attendees|industry experts))\b/i
+        /\b(?:Held under the patronage|Marking a historic milestone|GOTECH 2026 is a prestigious conference|The event brings together|The event offers|This year's|This yearâ€™s|With\s+\d[\d,]*\+?\s+(?:exhibitors|attendees|industry experts))\b/i
       );
 
       if (descriptionStart >= 0) {
@@ -423,7 +423,7 @@ export async function parseEventPage(html, url) {
   // ----------------------------------------------------------
 
   const datePattern =
-    /\b(?:\d{1,2}\s+[A-Za-z]{3,9}\s*(?:-|–|—|to)\s*\d{1,2}\s+[A-Za-z]{3,9}|\d{1,2}\s*[-–]\s*\d{1,2}\s+[A-Za-z]{3,9}|[A-Za-z]{3,9}\s+\d{1,2}\s*(?:-|–|—|to)\s*(?:[A-Za-z]{3,9}\s+)?\d{1,2})[,]?\s*20\d{2}\b/i;
+    /\b(?:\d{1,2}\s+[A-Za-z]{3,9}\s*(?:-|â€“|â€”|to)\s*\d{1,2}\s+[A-Za-z]{3,9}|\d{1,2}\s*[-â€“]\s*\d{1,2}\s+[A-Za-z]{3,9}|[A-Za-z]{3,9}\s+\d{1,2}\s*(?:-|â€“|â€”|to)\s*(?:[A-Za-z]{3,9}\s+)?\d{1,2})[,]?\s*20\d{2}\b/i;
 
   const dateText =
     body.match(datePattern)?.[0] ||
@@ -590,81 +590,376 @@ try {
   };
 }
 
+
 // ============================================================
 // External speakers, exhibitors, sponsors and host parsing
 // ============================================================
+
+// ------------------------------------------------------------
+// Generic validation helpers â€” no hardcoded brand/event names
+// ------------------------------------------------------------
+
+/**
+ * Tier/category labels that describe a sponsorship level, not a company name.
+ * Used to strip tier prefixes from image alt text, and to reject strings
+ * that consist only of a tier label (e.g. "Gold Sponsors" standing alone).
+ */
+const TIER_LABEL_RE = /\b(?:session|headline|title|presenting|diamond|platinum|gold|silver|bronze|principal|strategic|knowledge|event|official|supporting|founding|premier|exclusive|major|associate|community|industry|media)\s+(?:sponsors?|partners?|supporters?|supply\s+partners?|exhibitors?)\b/i;
+
+/**
+ * Strings that are clearly not entity names: navigation fragments, single-word
+ * UI chrome, form/portal instruction phrases, and generic image asset labels.
+ * Matched against the fully-cleaned candidate (case-insensitive, `x` flag for
+ * inline comments).
+ */
+const JUNK_VALUE_RE = /^(?:home|news|about|menu|search|login|logout|profile|register|submit|send|apply|close|open|back|next|prev|previous|skip|more|view|read|visit|here|link|follow|share|print|upload|download|media|support|help|faq|terms|privacy|cookie|copyright|\u00a9|enquiry|contact|email|website|company\s+(?:name|address|profile|info(?:rmation)?)|social\s+media(?:\s+pages?)?|stand\s+and\s+hall(?:\s+number)?|hall\s+number|marketing\s+contact(?:\s+details?)?|(?:exhibiting\s+)?staff\s+members?|product\s+offerings?|about\s+us|(?:check|update|set|confirm|review)\s+(?:your\s+)?\w.*|make\s+sure\s.*|opt[\s-]?(?:in|out)|along\s+with\b.*|so\s+you\s+only.*|your\s+(?:details|contact|marketing|information)\b.*|plan\s+your(?:\s+show)?|(?:website\s+)?logo(?:-\d+)?|image(?:\s*\d+)?|(?:brand|sponsor|partner|event|show|placeholder|default)\s+(?:logo|image)|\w+\s+logo-\d+|logo-\d+|white(?:\s+image)?|black(?:\s+image)?|host\s+city|venue\s+partner|dubai\s+world\s+trade\s+cent(?:re|er)?|dwtc|ticketing|don+w?n?load)$/i;
+
+/**
+ * Strip sponsorship tier prefixes embedded in image alt text, and remove
+ * trailing " logo" / " image" suffixes.
+ *
+ * Works generically on any event website â€” does NOT hardcode event names.
+ *
+ * Pattern handled (any depth):
+ *   "<Anything> - <TierLabel> - <CompanyName>"  â†’  "<CompanyName>"
+ *   "<Anything> - <TierLabel>"                  â†’  ""  (fails isValidName)
+ *   "<CompanyName> logo"                         â†’  "<CompanyName>"
+ */
+function cleanName(raw) {
+  let name = normalize(raw)
+    .replace(/^[-â€“â€”â€¢Â·â–¸â–ºâ–ª,\s]+/, '')
+    .replace(/[-â€“â€”â€¢Â·â–¸â–ºâ–ª,\s]+$/, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')   // trailing parentheticals
+    .trim();
+
+  // Iteratively strip "Prefix - TierLabel -" segments from the front.
+  // Stops when no further tier-label prefix is present.
+  let prev;
+  do {
+    prev = name;
+    name = name.replace(
+      /^[^-â€“â€”]{1,60}[-â€“â€”]\s*(?:\w+\s+)*(?:sponsors?|partners?|supporters?|supply\s+partner|exhibitors?)\s*[-â€“â€”]\s*/i,
+      ''
+    );
+  } while (name !== prev);
+
+  // Strip a trailing standalone tier label (e.g. "EventName - Gold Sponsors").
+  name = name.replace(
+    /^[^-â€“â€”]{1,60}[-â€“â€”]\s*(?:\w+\s+)*(?:sponsors?|partners?|supporters?|supply\s+partner|exhibitors?)\s*$/i,
+    ''
+  );
+
+  // Strip trailing " logo" or " image" as whole words.
+  name = name.replace(/\s+(?:logo|image)\s*$/i, '').trim();
+
+  // Strip a single "EventOrBrand - " prefix when the remainder starts with
+  // an uppercase character (heuristic: only one level, to avoid over-stripping).
+  if (/^[A-Za-z][\w\s&]{3,50}[-â€“â€”]\s+[A-Z]/.test(name)) {
+    name = name.replace(/^[A-Za-z][\w\s&.,']{3,50}[-â€“â€”]\s+/, '').trim();
+  }
+
+  return name;
+}
+
+/**
+ * Returns true only if the candidate looks like a real entity name
+ * (brand, organisation, or person) rather than UI chrome, a tier label,
+ * a generic image descriptor, or a form instruction fragment.
+ */
+function isValidName(value) {
+  if (!value || value.length < 2 || value.length > 100) return false;
+  if (JUNK_VALUE_RE.test(value)) return false;
+  // Reject standalone tier labels ("Gold Sponsors", "Official Partner" â€¦).
+  if (TIER_LABEL_RE.test(value) && value.split(/\s+/).length <= 4) return false;
+  // Reject sentence-length fragments.
+  if (value.split(/\s+/).length > 8) return false;
+  // Allow honorifics before checking for sentence-terminal punctuation.
+  const noHonorifics = value.replace(/\b(?:dr|mr|mrs|ms|prof)\./gi, '');
+  if (/[?!]/.test(noHonorifics)) return false;
+  if (/^https?:\/\//i.test(value)) return false;
+  if (/@/.test(value) && /\./.test(value)) return false;
+  if (/^\d+$/.test(value)) return false;
+  return true;
+}
+
+// ------------------------------------------------------------
+// Section extraction helpers
+// ------------------------------------------------------------
+
+/**
+ * Collect all DOM siblings that belong to the content section following a
+ * heading, stopping at the next heading-level element. Also scans parent-
+ * container children when the heading is inside a section/div wrapper.
+ */
+function getSectionSiblings($, heading) {
+  const siblings = [];
+  let current = $(heading).next();
+
+  for (let i = 0; i < 20 && current.length; i++) {
+    const tag = (current.prop('tagName') || '').toLowerCase();
+    if (/^h[1-6]$/.test(tag) || current.is('[role="heading"]')) break;
+    siblings.push(current);
+    current = current.next();
+  }
+
+  const parent = $(heading).parent();
+  const parentTag = (parent.prop('tagName') || '').toLowerCase();
+
+  if (['section', 'div', 'article', 'main'].includes(parentTag)) {
+    const children = parent.children().toArray();
+    const idx = children.indexOf(heading);
+
+    for (let i = idx + 1; i < children.length && i < idx + 20; i++) {
+      const child = $(children[i]);
+      const tag = (child.prop('tagName') || '').toLowerCase();
+      if (/^h[1-6]$/.test(tag) || child.is('[role="heading"]')) break;
+      if (!siblings.some((s) => s.is(child))) siblings.push(child);
+    }
+  }
+
+  return siblings;
+}
+
+/**
+ * Extract entity names from a single section element.
+ *
+ * Priority order (stops at first strategy that produces results):
+ *   1. Structured list / semantic name elements (li, card, name, title â€¦).
+ *      Prefers leaf-node image alt over concatenated deep text to avoid
+ *      tier-label + company-name merging.
+ *   2. Image alt text â€” most reliable signal for sponsor logo grids.
+ *   3. Link-level signals: embedded image alt > link title > short link text.
+ *   4. Plain text split on delimiter characters as last resort.
+ */
+function extractNamesFromElement($, section) {
+  // 1. Structured semantic elements.
+  const structured = section
+    .find([
+      'li',
+      '[class*="name"]',
+      '[class*="title"]',
+      '[class*="card"]',
+      '[class*="speaker"]',
+      '[class*="sponsor"]',
+      '[class*="partner"]',
+    ].join(', '))
+    .toArray()
+    .map((el) => {
+      const $el = $(el);
+      // For elements that contain nested images (logo grids),
+      // prefer the first image alt to avoid mixing tier labels into the text.
+      const imgAlt = $el.find('img[alt]').first().attr('alt');
+      const leafText = $el.children().length === 0 ? $el.text() : null;
+      return cleanName(imgAlt ?? leafText ?? $el.text());
+    })
+    .filter(isValidName);
+
+  if (structured.length) return structured;
+
+  // 2. Image alt text.
+  const altNames = section.find('img[alt]').toArray()
+    .map((img) => cleanName($(img).attr('alt') || ''))
+    .filter(isValidName);
+
+  if (altNames.length) return altNames;
+
+  // 3. Link-level signals (embedded alt > title > short link text â‰¤ 4 words).
+  const linkNames = section.find('a').toArray().flatMap((link) => {
+    const $link = $(link);
+    const imgAlt   = cleanName($link.find('img').first().attr('alt') || '');
+    const title    = cleanName($link.attr('title') || '');
+    const text     = cleanName($link.text());
+    const shortTxt = text.split(/\s+/).length <= 4 ? text : '';
+    const candidate = imgAlt || title || shortTxt;
+    return isValidName(candidate) ? [candidate] : [];
+  });
+
+  if (linkNames.length) return linkNames;
+
+  // 4. Plain text split fallback - skip if section has links (avoids nav blob concatenation).
+  if (section.find('a').length > 0) return [];
+  return normalize(section.text())
+    .split(/[;\n|\u2022,]/)
+    .map(cleanName)
+    .filter(isValidName);
+}
+
+/**
+ * Extract all valid entity names from the content section that follows
+ * the given heading element.
+ */
+function extractNamesFromSection($, heading, patterns) {
+  const names = [];
+
+  for (const section of getSectionSiblings($, heading)) {
+    names.push(...extractNamesFromElement($, section));
+  }
+
+  // Deduplicate and remove any value that matches the section heading pattern
+  // itself (e.g. the word "Sponsors" should not appear as a sponsor name).
+  return [...new Set(names)]
+    .filter((n) => !patterns.some((p) => p.test(n)))
+    .slice(0, 100);
+}
+
+// ------------------------------------------------------------
+// Public parsing functions
+// ------------------------------------------------------------
 
 export function parseExternalPeople(html) {
   const $ = cheerio.load(html);
 
   $('script, style, noscript, svg').remove();
 
-  const headings = $('h1, h2, h3, h4, h5, [role="heading"]').toArray();
+  const headings = $('h1, h2, h3, h4, h5, h6, [role="heading"]').toArray();
 
   const result = {
-    speakers: [],
+    speakers:   [],
     exhibitors: [],
-    sponsors: [],
-    host: []
+    sponsors:   [],
+    host:       [],
   };
 
   const rules = {
     speakers: [
       /^speakers?$/i,
       /keynote speakers?/i,
-      /speaker line.?up/i
+      /speaker line.?up/i,
+      /featured speakers?/i,
+      /our speakers?/i,
     ],
     exhibitors: [
       /^exhibitors?$/i,
-      /exhibition directory/i
+      /exhibition directory/i,
+      /exhibitor list/i,
+      /our exhibitors?/i,
     ],
     sponsors: [
       /^sponsors?$/i,
+      /^partners?$/i,
       /our partners/i,
-      /supporting partners/i,
-      /partners and sponsors/i
+      /our sponsors/i,
+      /supporting partners?/i,
+      /partners\s*(?:and|&)\s*sponsors/i,
+      /sponsors\s*(?:and|&)\s*partners/i,
+      /official sponsors?/i,
+      /platinum sponsors?/i,
+      /gold sponsors?/i,
+      /silver sponsors?/i,
+      /bronze sponsors?/i,
+      /title sponsors?/i,
+      /strategic partners?/i,
+      /event partners?/i,
+      /knowledge partners?/i,
+      /diamond sponsors?/i,
+      /presenting sponsors?/i,
+      /sponsored by/i,
+      /supported by/i,
     ],
     host: [
       /^host$/i,
       /^hosts$/i,
       /hosted by/i,
-      /event host/i
-    ]
+      /event host/i,
+      /^organi[sz]er$/i,
+      /^organi[sz]ers$/i,
+      /^organi[sz]ed by$/i,
+      /^about the (?:organi[sz]er|host)/i,
+    ],
   };
 
+  // â”€â”€ Heading-based extraction â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   for (const [key, patterns] of Object.entries(rules)) {
     for (const heading of headings) {
       const headingText = normalize($(heading).text());
+      if (!patterns.some((p) => p.test(headingText))) continue;
 
-      if (!patterns.some((pattern) => pattern.test(headingText))) {
-        continue;
+      const names = extractNamesFromSection($, heading, patterns);
+      if (names.length) {
+        result[key] = names;
+        break;
       }
+    }
+  }
 
-      const section = $(heading).next();
+  // â”€â”€ Fallback: class/id-based sponsor logo grid (no preceding heading) â”€â”€
+  // Requires â‰¥ 2 valid image alt names to accept the container, to avoid
+  // picking up navigation elements that happen to match class names.
+  if (!result.sponsors.length) {
+    for (const container of $(
+      '[class*="sponsor"], [class*="partner"], [id*="sponsor"], [id*="partner"]'
+    ).toArray()) {
+      const names = [];
+      $(container).find('img[alt]').each((_, img) => {
+        const alt = cleanName($(img).attr('alt') || '');
+        if (isValidName(alt)) names.push(alt);
+      });
+      const unique = [...new Set(names)];
+      if (unique.length >= 2) {
+        result.sponsors = unique.slice(0, 100);
+        break;
+      }
+    }
+  }
 
-      const candidates = section
-        .find('li, a, [class*="name"], [class*="title"]')
-        .toArray()
-        .map((element) => normalize($(element).text()));
-
-      const fallback = normalize(section.text())
-        .split(/[;\n|•]/)
-        .map(normalize);
-
-      result[key] = [
-        ...new Set(
-          (candidates.length ? candidates : fallback).filter(
-            (value) =>
-              value.length > 1 &&
-              value.length < 100 &&
-              !patterns.some((pattern) => pattern.test(value))
-          )
-        )
-      ].slice(0, 100);
-
-      if (result[key].length) break;
+  // â”€â”€ Fallback: body-text "hosted/organised by â€¦" pattern for host â”€â”€â”€â”€â”€â”€â”€
+  if (!result.host.length) {
+    const body = normalize($('body').text());
+    const match = body.match(
+      /(?:hosted|organised|organized)\s+by\s*[:\s]\s*([A-Z][\w\s&.,'-]{2,80}?)(?:\.|,\s*(?:a|an|the|in|is)\b|$)/i
+    );
+    if (match) {
+      const name = cleanName(match[1]);
+      if (isValidName(name)) result.host = [name];
     }
   }
 
   return result;
+}
+
+/**
+ * Discover same-domain subpage links from the external event homepage that
+ * are likely to contain sponsors, speakers, exhibitors, or organiser info.
+ * Returns up to 8 unique URLs for the renderer to visit.
+ */
+export function discoverExternalSubpages(html, baseUrl) {
+  const $ = cheerio.load(html);
+  const links = [];
+  const seen = new Set();
+
+  const relevantPatterns = [
+    /sponsor/i,
+    /partner/i,
+    /exhibitor/i,
+    /speaker/i,
+    /about/i,
+    /organi[sz]er/i,
+    /who.?we.?are/i,
+  ];
+
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href') || '';
+    const text = normalize($(el).text()).toLowerCase();
+
+    const isRelevant =
+      relevantPatterns.some((p) => p.test(text)) ||
+      relevantPatterns.some((p) => p.test(href));
+
+    if (!isRelevant) return;
+
+    try {
+      const resolved = new URL(href, baseUrl);
+      const base = new URL(baseUrl);
+      if (resolved.hostname !== base.hostname) return;
+      const key = resolved.origin + resolved.pathname;
+      if (key === base.origin + base.pathname) return;
+      if (seen.has(key)) return;
+      seen.add(key);
+      links.push(resolved.toString());
+    } catch {
+      // Ignore malformed URLs.
+    }
+  });
+
+  return links.slice(0, 8);
 }
